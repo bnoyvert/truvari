@@ -55,6 +55,7 @@ import argparse
 from functools import cmp_to_key
 from collections import defaultdict, namedtuple
 
+import numpy
 import pysam
 import pyfaidx
 
@@ -309,25 +310,12 @@ def edit_output_entry(entry, neighs, match_id, hap, outputs, keep="first"):
         new_entry.samples[0]["GT"] = (1, 1)
         return new_entry
 
-
-    # Update with the first genotyped sample's information
-    for samp_name in new_entry.samples:
-        fmt = new_entry.samples[samp_name]
-        m_gt = truvari.stats.get_gt(fmt["GT"])
-        if m_gt == truvari.GT.NON:
-            idx = 0
-            assigned = False
-            while not assigned and idx < len(neighs):
-                s_fmt = neighs[idx][0].samples[samp_name]
-                s_gt = truvari.stats.get_gt(s_fmt["GT"])
-                if s_gt != truvari.GT.NON:
-                    assigned = True
-                    for key in fmt:
-                        try:
-                            fmt[key] = s_fmt[key]
-                        except Exception as e:
-                            pass
-                idx += 1
+    sum_array = numpy.zeros(len(neighs[0][0].samples[0]["FT"]), dtype=int)
+    for entry in neighs:
+        m_array = numpy.array([int(_) for _ in list(entry[0].samples[0]["FT"])], dtype=int)
+        sum_array += m_array
+    sum_array[sum_array > 2] = 2
+    new_entry.samples[0]["FT"] = "".join([str(_) for _ in sum_array])
     return new_entry
 
 def find_neighbors(base_entry, match_id, reference, matched_calls, args, outputs):
