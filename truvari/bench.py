@@ -125,8 +125,7 @@ class Matcher():
         Makes a simple namespace of matching parameters
         """
         ret = types.SimpleNamespace()
-        ret.reference = pysam.FastaFile(
-            args.reference) if args.reference else None
+        ret.reference = args.reference
         ret.refdist = args.refdist
         ret.pctsim = args.pctsim
         ret.buffer = args.buffer
@@ -215,8 +214,9 @@ class Matcher():
             ret.state = False
 
         if self.params.pctsim > 0:
-            ret.seqsim = truvari.entry_pctsim(base, comp, self.params.reference,
-                                              self.params.buffer, self.params.use_lev)
+            ref = pysam.FastaFile(self.params.reference)
+            ret.seqsim = truvari.entry_pctsim(base, comp, ref, self.params.buffer,
+                                              self.params.use_lev)
             if ret.seqsim < self.params.pctsim:
                 logging.debug("%s and %s sequence similarity is too low (%.3ff)",
                               str(base), str(comp), ret.seqsim)
@@ -773,8 +773,9 @@ def bench_main(cmdargs):
                                                    args.includebed,
                                                    args.sizemax)
 
+    pipe = [compare_chunk]
     chunks = chunker(matcher, ('base', base), ('comp', comp))
-    for call in itertools.chain.from_iterable(map(compare_chunk, chunks)):
+    for call in itertools.chain.from_iterable(truvari.fchain(pipe, chunks, workers=8)):
         output_writer(call, outputs, args.sizemin)
 
     with open(os.path.join(args.output, "summary.txt"), 'w') as fout:

@@ -9,7 +9,6 @@ INDIR=repo_utils/test_files
 ANSDIR=$INDIR/answer_key
 OD=test_results
 COVERAGE_RCFILE=.coveragerc
-
 # Reset test results
 rm -rf $OD
 mkdir -p $OD
@@ -18,6 +17,12 @@ truv="coverage run --concurrency=multiprocessing -p -m truvari.__main__"
 # ------------------------------------------------------------
 #                                 test helpers
 # ------------------------------------------------------------
+vcf_sort() {
+    INFN=$1
+    OUFN=$2
+    (zgrep "^#" $INFN && (zgrep -v "^#" $INFN | sort -k2,2n)) > $OUFN
+}
+
 fn_md5() {
     fn=$1
     # simple md5sum checking
@@ -39,8 +44,10 @@ bench() {
     for i in $ANSDIR/bench${k}/*.vcf
     do
         bname=$(basename $i | sed 's/[\.|\-]/_/g')
+        cname=$OD/bench${k}/$(basename $i)
+        vcf_sort $cname ${cname%.vcf}.sort.vcf
         run test_bench${k}_${bname}
-        assert_equal $(fn_md5 $i) $(fn_md5 $OD/bench${k}/$(basename $i))
+        assert_equal $(fn_md5 ${i}) $(fn_md5 ${cname%.vcf}.sort.vcf)
     done
 }
 
@@ -94,10 +101,11 @@ df_check() {
     test_name=$1
     base_df=$2
     comp_df=$3
+    vals=$4
     run $test_name python3 -c """
 import joblib;
-a = joblib.load(\"$base_df\")
-b = joblib.load(\"$comp_df\")
+a = joblib.load(\"$base_df\").sort_values($vals).sort_index()
+b = joblib.load(\"$comp_df\").sort_values($vals).sort_index()
 assert a.equals(b), \"$base_df != $comp_df\";
 """
     assert_exit_code 0
@@ -212,7 +220,7 @@ info_tests svinfo $OD/anno_svinfo.vcf SVTYPE,SVLEN
 run test_anno_grm $truv anno grm -i $INDIR/input2.vcf.gz -r $REF -o $OD/grm.jl
 assert_exit_code 0
 
-df_check test_grm_result $ANSDIR/grm.jl $OD/grm.jl
+df_check test_grm_result $ANSDIR/grm.jl $OD/grm.jl "['key']"
 
 #                               af
 # waiting on unit tests. might make an anno tool out of this eventually, though
@@ -242,23 +250,23 @@ assert_exit_code 1
 # ------------------------------------------------------------
 run test_vcf2df $truv vcf2df -f -i $INDIR/input1.vcf.gz $OD/vcf2df.jl
 assert_exit_code 0
-df_check test_vcf2df_result $ANSDIR/vcf2df.jl $OD/vcf2df.jl
+df_check test_vcf2df_result $ANSDIR/vcf2df.jl $OD/vcf2df.jl "['svtype', 'svlen']"
 
 run test_vcf2df_dir $truv vcf2df -f -i -b $OD/bench23/ $OD/truv2df.jl
 assert_exit_code 0
-df_check test_vcf2df_dir_result $ANSDIR/truv2df.jl $OD/truv2df.jl
+df_check test_vcf2df_dir_result $ANSDIR/truv2df.jl $OD/truv2df.jl "['svtype', 'svlen', 'state']"
 
 run test_vcf2df_single $truv vcf2df -f -i -s NA12878 $INDIR/input2.vcf.gz $OD/single_vcf2df.jl
 assert_exit_code 0
-df_check test_vcf2df_single $ANSDIR/single_vcf2df.jl $OD/single_vcf2df.jl
+df_check test_vcf2df_single $ANSDIR/single_vcf2df.jl $OD/single_vcf2df.jl "['svtype', 'svlen']"
 
 run test_vcf2df_subset $truv vcf2df -f -i -s HG00733,NA12878 -m $INDIR/multi.vcf.gz $OD/subset_vcf2df.jl
 assert_exit_code 0
-df_check test_vcf2df_subset $ANSDIR/subset_vcf2df.jl $OD/subset_vcf2df.jl
+df_check test_vcf2df_subset $ANSDIR/subset_vcf2df.jl $OD/subset_vcf2df.jl "['svtype', 'svlen']"
 
 run test_vcf2df_multi $truv vcf2df -f -i -m $INDIR/multi.vcf.gz $OD/multi_vcf2df.jl
 assert_exit_code 0
-df_check test_vcf2df_multi $ANSDIR/multi_vcf2df.jl $OD/multi_vcf2df.jl
+df_check test_vcf2df_multi $ANSDIR/multi_vcf2df.jl $OD/multi_vcf2df.jl "['svtype', 'svlen']"
 
 
 # ------------------------------------------------------------

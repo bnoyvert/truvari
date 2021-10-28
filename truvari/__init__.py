@@ -36,6 +36,7 @@ Extra methods:
 
 Dev methods:
 :meth:`cmd_exe`
+:meth:`fchain`
 :meth:`help_unknown_cmd`
 :meth:`optimize_df_memory`
 :meth:`restricted_float`
@@ -96,6 +97,10 @@ from truvari.comparisons import (
     seqsim,
     sizesim,
     weighted_score,
+)
+
+from truvari.pipeline import (
+    fchain
 )
 
 from truvari.utils import (

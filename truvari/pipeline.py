@@ -62,30 +62,4 @@ def fchain(pipe, data, workers=1):
                 continue
             yield cur_result
             # Can't keep all of these around. Manually remove as you go.
-            del(future_results[future])
-
-def test():
-    import pysam
-    import time
-    import random
-    import itertools
-    v = pysam.VariantFile("../repo_utils/test_files/input1.vcf.gz")
-    def chunker(matcher, files):
-        a = 40#random.randint(10, 50)
-        for i in range(a):
-            yield i, matcher, files
-    def compare(null):
-        # So this is the problem...
-        number, matcher, mlist = null
-        slp = random.randint(1, 3)
-        time.sleep(slp)
-        yield str(number) + '.' + str(slp) + '_' + str(matcher) + str(mlist)
-    mat = "matcher"
-    pipe = [compare]
-    kwargs = {'matcher':mat, 'files':'balls'}#[('base', 1), ('comp', 2)] }
-    c = chunker(mat, 'balls')
-    for _ in itertools.chain.from_iterable(fchain(pipe, c, workers=8)):
-        print(_)
-
-if __name__ == '__main__':
-    test()
+            del future_results[future]
