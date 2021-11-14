@@ -138,9 +138,9 @@ def entry_gt_comp(entryA, entryB, sampleA=None, sampleB=None):
         True
     """
     if not sampleA:
-        sampleA = entryA.samples.keys()[0]
+        sampleA = list(entryA.samples.keys())[0]
     if not sampleB:
-        sampleB = entryB.samples.keys()[0]
+        sampleB = list(entryB.samples.keys())[0]
     return entryA.samples[sampleA]["GT"] == entryB.samples[sampleB]["GT"]
 
 

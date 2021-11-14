@@ -20,6 +20,22 @@ import numpy as np
 import truvari
 from truvari.giab_report import make_giabreport
 
+class StrRecord():
+    def __init__(self, s):
+        self.chrom = s.chrom
+        self.start = s.start
+        self.stop = s.stop
+        self.alleles = s.alleles
+        self.id = s.id
+        self.qual = s.qual
+        self.filter = [str(_) for _ in s.filter]
+        self.info = dict(s.info)
+        samp = {}
+        for k, v in s.samples.items():
+            samp[k] = copy.copy(dict(v))
+        self.samples = samp
+        self.ref = copy.copy(s.ref)
+        self.alts = copy.copy(s.alts)
 
 @total_ordering
 class MatchResult():  # pylint: disable=too-many-instance-attributes
@@ -346,7 +362,7 @@ def chunker(matcher, *files):
         new_chunk = cur_end and cur_end + matcher.params.chunksize < entry.start
         if new_chunk or new_chrom:
             chunk_count += 1
-            yield matcher, cur_chunk, chunk_count
+            yield matcher.params.reference, cur_chunk, chunk_count
             # Reset
             cur_chrom = None
             cur_end = None
@@ -356,22 +372,24 @@ def chunker(matcher, *files):
             logging.debug(f"Adding to {key} -> {entry}")
             cur_chrom = entry.chrom
             cur_end = entry.stop
-            cur_chunk[key].append(entry)
+            cur_chunk[key].append(StrRecord(entry))
             call_counts[key] += 1
         else:
-            cur_chunk['__filtered'].append(entry)
+            cur_chunk['__filtered'].append(StrRecord(entry))
             call_counts['__filtered'] += 1
     chunk_count += 1
     logging.info(
         f"{chunk_count} chunks of {sum(call_counts.values())} variants. {call_counts}")
-    yield matcher, cur_chunk, chunk_count
+    yield matcher.params.reference, cur_chunk, chunk_count
 
 
 def compare_chunk(chunk):
     """
     Given a filtered chunk, (from chunker) compare all of the calls
     """
-    matcher, chunk_dict, chunk_id = chunk
+    reference, chunk_dict, chunk_id = chunk
+    matcher = Matcher()
+    matcher.params.reference = reference
     logging.debug(f"Comparing chunk {chunk_dict}")
 
     # All FPs
@@ -758,6 +776,8 @@ def bench_main(cmdargs):
     """
     Main
     """
+
+    import multiprocessing
     args = parse_args(cmdargs)
 
     if check_params(args) or check_inputs(args):
@@ -765,6 +785,7 @@ def bench_main(cmdargs):
         sys.exit(100)
 
     matcher = Matcher(args=args)
+
     outputs = setup_outputs(args)
 
     base = pysam.VariantFile(args.base)
@@ -774,9 +795,17 @@ def bench_main(cmdargs):
                                                    args.sizemax)
 
     pipe = [compare_chunk]
-    chunks = chunker(matcher, ('base', base), ('comp', comp))
-    for call in itertools.chain.from_iterable(truvari.fchain(pipe, chunks, workers=8)):
-        output_writer(call, outputs, args.sizemin)
+    chunks = chunker(matcher, ('base', base.fetch()),
+                              ('comp', comp.fetch()))
+    logging.critical('chunks?')
+    with multiprocessing.Pool(4, maxtasksperchild=1) as pool:
+        #truvari.fchain(pipe, chunks, workers=48)):
+        results = pool.imap(compare_chunk, chunks)
+        pool.close()
+        for call in itertools.chain.from_iterable(results):
+            logging.critical('what the heck, mate')
+            output_writer(call, outputs, args.sizemin)
+        pool.join()
 
     with open(os.path.join(args.output, "summary.txt"), 'w') as fout:
         box = outputs["stats_box"]
