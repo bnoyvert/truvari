@@ -527,14 +527,18 @@ def annotate_entry(entry, match, header):
     return entry
 
 
-def output_writer(call, outs, sizemin):
+def output_writer(call, outs, sizemin, base_included, comp_included):
     """
     Annotate a MatchResults' entries, write to the apppropriate file in outs
     and do the stats counting.
     Writer is responsible for handling FPs between sizefilt-sizemin
+    and for matching against variants just outside the bed file regions
     """
+    if not(base_included) and not(comp_included):   # both variants are not inside the regions
+        return
+    
     box = outs["stats_box"]
-    if call.base:
+    if call.base and (base_included or call.state):
         box["base cnt"] += 1
         entry = annotate_entry(call.base, call, outs['n_base_header'])
         if call.state:
@@ -552,7 +556,7 @@ def output_writer(call, outs, sizemin):
             box["FN"] += 1
             outs["fn_out"].write(entry)
 
-    if call.comp:
+    if call.comp and (comp_included or call.state):
         entry = annotate_entry(call.comp, call, outs['n_comp_header'])
         if call.state:
             box["call cnt"] += 1
@@ -633,11 +637,15 @@ def parse_args(args):
                         help="Don't include 0/0 or ./. GT calls from all (a), base (b), or comp (c) vcfs (%(default)s)")
     filteg.add_argument("--includebed", type=str, default=None,
                         help="Bed file of regions in the genome to include only calls overlapping")
+    thresg.add_argument("--extend", type=int, default=None,
+                        help="Extend the regions in the bed file for variant matching, default is --refdist, if --includebed is defined, None overwise. Set --extend 0 to switch the extension off.")
     filteg.add_argument("--multimatch", action="store_true", default=defaults.multimatch,
                         help=("Allow base calls to match multiple comparison calls, and vice versa. "
                               "Output vcfs will have redundant entries. (%(default)s)"))
 
     args = parser.parse_args(args)
+    if args.includebed and args.extend is None:
+        args.extend = args.refdist
     if args.pctsim != 0 and not args.reference:
         parser.error("--reference is required when --pctsim is set")
     if args.chunksize < args.refdist:
@@ -770,16 +778,33 @@ def bench_main(cmdargs):
 
     base = pysam.VariantFile(args.base)
     comp = pysam.VariantFile(args.comp)
+    
+    extension_required = args.extend is not None and args.extend > 0 
 
-    regions = truvari.RegionVCFIterator(base, comp,
+    regions_bed = truvari.RegionVCFIterator(base, comp,
                                         args.includebed,
-                                        args.sizemax)
+                                        args.sizemax,
+                                        0)
+    if extension_required:
+        logging.info("Extending bed regions by %d bases each side", args.extend)
+        regions_extended = truvari.RegionVCFIterator(base, comp,
+                                            args.includebed,
+                                            args.sizemax,
+                                            args.extend)
+        regions = regions_extended
+    else:
+        regions = regions_bed
+    
     base_i = regions.iterate(base)
     comp_i = regions.iterate(comp)
 
     chunks = chunker(matcher, ('base', base_i), ('comp', comp_i))
     for call in itertools.chain.from_iterable(map(compare_chunk, chunks)):
-        output_writer(call, outputs, args.sizemin)
+        if extension_required:
+            base_included, comp_included = regions_bed.include(call.base), regions_bed.include(call.comp)
+        else:
+            base_included, comp_included = True, True
+        output_writer(call, outputs, args.sizemin, base_included, comp_included)  # Pass the filters against the original regions
 
     with open(os.path.join(args.output, "summary.txt"), 'w') as fout:
         box = outputs["stats_box"]

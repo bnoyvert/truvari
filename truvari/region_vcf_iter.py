@@ -17,13 +17,14 @@ class RegionVCFIterator():
     Subset to only events on contigs listed in vcfA left-join vcfB
     """
 
-    def __init__(self, vcfA, vcfB=None, includebed=None, max_span=None):
+    def __init__(self, vcfA, vcfB=None, includebed=None, max_span=None, extend=0):
         """ init """
         self.includebed = includebed
         self.max_span = max_span
-        self.tree = self.__build_tree(vcfA, vcfB)
+        self.extend = extend
+        self.tree = self.__build_tree(vcfA, vcfB, extend)
 
-    def __build_tree(self, vcfA, vcfB):
+    def __build_tree(self, vcfA, vcfB,extend=0):
         """
         Build the include regions
         """
@@ -34,7 +35,7 @@ class RegionVCFIterator():
             contigB_set = contigA_set
 
         if self.includebed is not None:
-            all_regions, counter = build_anno_tree(self.includebed)
+            all_regions, counter = build_anno_tree(self.includebed, extend=extend)
             logging.info("Including %d bed regions", counter)
             return all_regions
 
@@ -68,18 +69,22 @@ class RegionVCFIterator():
         Returns if this entry's start and end are within a region that is to be included
         Here overlap means lies completely within the boundary of an include region
         """
-        astart, aend = tcomp.entry_boundaries(entry)
-        # Filter these early so we don't have to keep checking overlaps
-        if self.max_span is None or aend - astart > self.max_span:
+        if entry:
+            astart, aend = tcomp.entry_boundaries(entry)
+            # Filter these early so we don't have to keep checking overlaps
+            if self.max_span is None or aend - astart > self.max_span:
+                return False
+            overlaps = self.tree[entry.chrom].overlaps(astart) \
+                and self.tree[entry.chrom].overlaps(aend)
+            if astart == aend:
+                return overlaps
+            return overlaps and len(self.tree[entry.chrom].overlap(astart, aend)) == 1
+        # If entry is None then return False
+        else:
             return False
-        overlaps = self.tree[entry.chrom].overlaps(astart) \
-            and self.tree[entry.chrom].overlaps(aend)
-        if astart == aend:
-            return overlaps
-        return overlaps and len(self.tree[entry.chrom].overlap(astart, aend)) == 1
 
 
-def build_anno_tree(filename, chrom_col=0, start_col=1, end_col=2, one_based=False, comment='#'):
+def build_anno_tree(filename, chrom_col=0, start_col=1, end_col=2, one_based=False, comment='#',extend=0):
     """
     Build an dictionary of IntervalTrees for each chromosome from tab-delimited annotation file
     """
@@ -106,8 +111,13 @@ def build_anno_tree(filename, chrom_col=0, start_col=1, end_col=2, one_based=Fal
             continue
         data = line.strip().split('\t')
         chrom = data[chrom_col]
-        start = int(data[start_col]) - correction
-        end = int(data[end_col])
+        start = int(data[start_col]) - correction - extend
+        if start < 0:
+            start = 0
+        end = int(data[end_col]) + extend
         tree[chrom].addi(start, end, data=idx)
-        idx += 1
+    # Merge overlapping intervals and count the number of intervals
+    for chrom, chr_tree in tree.items():
+        chr_tree.merge_overlaps()
+        idx += len(chr_tree)
     return tree, idx

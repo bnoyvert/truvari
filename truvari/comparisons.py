@@ -166,6 +166,8 @@ def create_pos_haplotype(a1, a2, ref, buf_len=0):
     end = max(a1_end, a2_end)
     buff = int((end - start) * buf_len)
     start -= buff
+    if start < 0:   # prevents pysam error on negative coordinates
+        start = 0
     end += buff
     hap1_seq = ref.fetch(chrom, start, a1_start) + \
         a1_seq + ref.fetch(chrom, a1_end, end)
