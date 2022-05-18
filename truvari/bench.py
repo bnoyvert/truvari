@@ -119,6 +119,7 @@ class Matcher():
         ret.passonly = False
         ret.no_ref = False
         ret.multimatch = False
+        ret.extend_both = False
         return ret
 
     @staticmethod
@@ -644,8 +645,10 @@ def parse_args(args):
                         help="Don't include 0/0 or ./. GT calls from all (a), base (b), or comp (c) vcfs (%(default)s)")
     filteg.add_argument("--includebed", type=str, default=None,
                         help="Bed file of regions in the genome to include only calls overlapping")
-    thresg.add_argument("--extend", type=truvari.restricted_int, default=0,
+    filteg.add_argument("--extend", type=truvari.restricted_int, default=0,
                         help="Distance to allow comp entries outside of includebed regions (%(default)s)")
+    filteg.add_argument("--extend_both", action="store_true", default=defaults.extend_both,
+                        help="Allow both base and comp entries outside of includebed regions (%(default)s)")
     filteg.add_argument("--multimatch", action="store_true", default=defaults.multimatch,
                         help=("Allow base calls to match multiple comparison calls, and vice versa. "
                               "Output vcfs will have redundant entries. (%(default)s)"))
@@ -657,6 +660,8 @@ def parse_args(args):
         parser.error("--chunksize must be >= --refdist")
     if args.extend and args.includebed is None:
         parser.error("--extend can only be used when --includebed is set")
+    if args.extend_both and not args.extend:
+        parser.error("--extend_both can only be used when --extend is greater than zero")
     return args
 
 
@@ -791,17 +796,28 @@ def bench_main(cmdargs):
                                         args.sizemax)
 
     regions.merge_overlaps()
-    regions_extended = regions.extend(args.extend) if args.extend else regions
+    regions_comp = regions.extend(args.extend) if args.extend else regions
+    regions_base = regions_comp if args.extend_both else regions
 
-    base_i = regions.iterate(base)
-    comp_i = regions_extended.iterate(comp)
+    base_i = regions_base.iterate(base)
+    comp_i = regions_comp.iterate(comp)
 
     chunks = chunker(matcher, ('base', base_i), ('comp', comp_i))
     for call in itertools.chain.from_iterable(map(compare_chunk, chunks)):
-        # setting non-matched call variants that are not fully contained in the original regions to None
+        # setting non-matched base and call variants that are not fully contained in the original regions to None
         # These don't count as FP or TP and don't appear in the output vcf files
-        if args.extend and call.comp is not None and not call.state and not regions.include(call.comp):
-            call.comp = None
+        if args.extend:
+            # Unmatched call variants in the extended regions
+            if call.comp is not None and not call.state and not regions.include(call.comp):
+                call.comp = None
+            if args.extend_both:
+                # Unmatched bases variant in the extended regions
+                if call.base is not None and not call.state and not regions.include(call.base):
+                    call.base = None
+                # Matched base and call variants, both in the extended regions
+                if call.state and not regions.include(call.base) and not regions.include(call.comp):
+                    call.base = None
+                    call.comp = None
         output_writer(call, outputs, args.sizemin)
 
     with open(os.path.join(args.output, "summary.txt"), 'w') as fout:
