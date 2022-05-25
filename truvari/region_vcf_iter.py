@@ -112,6 +112,32 @@ class RegionVCFIterator():
 
         ret.merge_overlaps()
         return ret
+        
+    def extend_by_trf(self, trf):
+        """
+        Extends each interval to include trf intervals that overlap it. trf is also RegionVCFIterator object
+        Useful for extension to the whole tandem repeat, rather than just by a fixed number of bases 
+        """
+        logging.info("Extending the regions by tandem repeats")
+        ret = copy.deepcopy(self)
+        for chrom in self.tree:
+            ret.tree[chrom] = IntervalTree.from_tuples(extend_interval_by_tree(i,trf.tree[chrom]) for i in ret.tree[chrom])
+        ret.merge_overlaps()
+        return ret
+
+def extend_interval_by_tree(i,itree):
+    """
+    Input: single interval 'i' and interval tree 'itree'.
+    Finds the overlap between the interval and the tree and extends the interval to include all overlapping intervals from the tree
+    """
+    # First find the tree intervals overlapping the input interval
+    ovrlp=IntervalTree.from_tuples(itree.overlap(i))
+    # Then add the input interval
+    ovrlp.add(i)
+    # Merge - make one interval
+    ovrlp.merge_overlaps()
+    # Return tuple
+    return ovrlp.begin(), ovrlp.end()
 
 def build_anno_tree(filename, chrom_col=0, start_col=1, end_col=2, one_based=False, comment='#'):
     """

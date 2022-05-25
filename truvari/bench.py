@@ -10,6 +10,7 @@ import types
 import logging
 import argparse
 import itertools
+import functools
 
 from functools import total_ordering
 from collections import defaultdict, OrderedDict, Counter
@@ -175,7 +176,7 @@ class Matcher():
 
         return False
 
-    def build_match(self, base, comp, matid=None, skip_gt=False):
+    def build_match(self, base, comp, matid=None, trf=None, skip_gt=False):
         """
         Build a MatchResult
         """
@@ -191,10 +192,18 @@ class Matcher():
             logging.debug("%s and %s are not the same SVTYPE",
                           str(base), str(comp))
             ret.state = False
-
+            
         bstart, bend = truvari.entry_boundaries(base)
         cstart, cend = truvari.entry_boundaries(comp)
-        if not truvari.overlaps(bstart - self.params.refdist, bend + self.params.refdist, cstart, cend):
+            
+        if trf is not None:
+            # Both variants should belong to the same TR region
+            in_the_same_tr = trf.include(base) and trf.include(comp) and (trf.tree[base.chrom].overlap(bstart, bend) == trf.tree[comp.chrom].overlap(cstart, cend))
+        else:
+            in_the_same_tr = False
+        
+        # To match the 2 variants should be within refdist or belong to the same TR region
+        if not truvari.overlaps(bstart - self.params.refdist, bend + self.params.refdist, cstart, cend) and not in_the_same_tr:
             logging.debug("%s and %s are not within REFDIST",
                           str(base), str(comp))
             ret.state = False
@@ -376,7 +385,7 @@ def chunker(matcher, *files):
     yield matcher, cur_chunk, chunk_count
 
 
-def compare_chunk(chunk):
+def compare_chunk(chunk, trf=None):
     """
     Given a filtered chunk, (from chunker) compare all of the calls
     """
@@ -410,7 +419,7 @@ def compare_chunk(chunk):
     for bid, b in enumerate(chunk_dict['base']):
         base_matches = []
         for cid, c in enumerate(chunk_dict['comp']):
-            mat = matcher.build_match(b, c, f"{chunk_id}.{bid}.{cid}")
+            mat = matcher.build_match(b, c, f"{chunk_id}.{bid}.{cid}", trf=trf)
             logging.debug(f"Made mat -> {mat}")
             base_matches.append(mat)
         match_matrix.append(base_matches)
@@ -649,6 +658,8 @@ def parse_args(args):
                         help="Distance to allow comp entries outside of includebed regions (%(default)s)")
     filteg.add_argument("--extend_both", action="store_true", default=defaults.extend_both,
                         help="Allow both base and comp entries outside of includebed regions (%(default)s)")
+    filteg.add_argument("--extend_by_trf", type=str, default=None,
+                        help="Bed file (usually tandem repeats) to extend the regions for variant matching. Similar to --extend option, but the extension is until the end of overlapping tandem repeats rather than fixed number of bases. Also modifies matching of variants - those either closer than refdist or in the same tandem repeat are matched.")
     filteg.add_argument("--multimatch", action="store_true", default=defaults.multimatch,
                         help=("Allow base calls to match multiple comparison calls, and vice versa. "
                               "Output vcfs will have redundant entries. (%(default)s)"))
@@ -660,7 +671,11 @@ def parse_args(args):
         parser.error("--chunksize must be >= --refdist")
     if args.extend and args.includebed is None:
         parser.error("--extend can only be used when --includebed is set")
-    if args.extend_both and not args.extend:
+    if args.extend_by_trf and args.includebed is None:
+        parser.error("--extend_by_trf can only be used when --includebed is set")
+    if args.extend and args.extend_by_trf:
+        parser.error("--extend and --extend_by_trf cannot be used simultaniously")
+    if args.extend_both and not (args.extend or args.extend_by_trf):
         parser.error("--extend_both can only be used when --extend is greater than zero")
     return args
 
@@ -794,19 +809,35 @@ def bench_main(cmdargs):
     regions = truvari.RegionVCFIterator(base, comp,
                                         args.includebed,
                                         args.sizemax)
-
     regions.merge_overlaps()
-    regions_comp = regions.extend(args.extend) if args.extend else regions
+    
+    regions_comp = regions 
+                       
+    # Introducing RegionVCFIterator object for tandem repeat regions
+    regions_tandem_repeats = None
+    if args.extend_by_trf is not None:
+        logging.info("Extending the regions and refdist to the end of overlapping tandem repeat intervals")
+        regions_tandem_repeats = truvari.RegionVCFIterator(base, comp, args.extend_by_trf)
+        regions_tandem_repeats.merge_overlaps()
+        # Extend high confidence regions by tandem repeats
+        regions_comp = regions.extend_by_trf(regions_tandem_repeats)
+        
+    if args.extend:
+        # Extend high confidence regions by a fixed number of bases
+        regions_comp = regions.extend(args.extend)
+
+    # Define the base regions depending if these should be extended as well
     regions_base = regions_comp if args.extend_both else regions
 
     base_i = regions_base.iterate(base)
     comp_i = regions_comp.iterate(comp)
 
     chunks = chunker(matcher, ('base', base_i), ('comp', comp_i))
-    for call in itertools.chain.from_iterable(map(compare_chunk, chunks)):
+    compare_chunk_worker = functools.partial(compare_chunk, trf=regions_tandem_repeats)
+    for call in itertools.chain.from_iterable(map(compare_chunk_worker, chunks)):
         # setting non-matched base and call variants that are not fully contained in the original regions to None
         # These don't count as FP or TP and don't appear in the output vcf files
-        if args.extend:
+        if args.extend or args.extend_by_trf:
             # Unmatched call variants in the extended regions
             if call.comp is not None and not call.state and not regions.include(call.comp):
                 call.comp = None
